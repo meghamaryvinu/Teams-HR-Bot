@@ -1,5 +1,7 @@
 streamlit
-langchain-community
-sentence-transformers
-langchain-groq
 python-dotenv
+scikit-learn
+langchain-groq
+langchain
+langchain-community
+pypdf
