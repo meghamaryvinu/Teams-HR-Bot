@@ -1,7 +1,5 @@
 import streamlit as st
 import os
-import time
-from dotenv import load_dotenv
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -11,18 +9,30 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 
-# Load environment variables
-load_dotenv()
-groq_api_key = os.getenv("HR_CHATBOT_GROQ_KEY")
+# Get API key from Streamlit secrets or environment variables
+try:
+    groq_api_key = st.secrets["HR_CHATBOT_GROQ_KEY"]
+except:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        groq_api_key = os.getenv("HR_CHATBOT_GROQ_KEY")
+    except:
+        groq_api_key = None
 
 if not groq_api_key:
-    st.error("❌ GROQ API key not set in .env (HR_CHATBOT_GROQ_KEY)")
+    st.error("❌ GROQ API key not set. Please configure it in Streamlit Cloud secrets or .env file.")
+    st.info("💡 In Streamlit Cloud, go to Settings → Secrets and add: HR_CHATBOT_GROQ_KEY = 'your_key_here'")
     st.stop()
 
 st.title("HR Chatbot (TF-IDF + Groq LLaMA3)")
 
 # Initialize LLM
-llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama3-70b-8192")
+@st.cache_resource
+def initialize_llm():
+    return ChatGroq(groq_api_key=groq_api_key, model_name="llama3-70b-8192")
+
+llm = initialize_llm()
 
 # Prompt Template
 prompt = ChatPromptTemplate.from_template("""
@@ -37,89 +47,113 @@ Question: {input}
 """)
 
 # TF-IDF Embedding
+@st.cache_data
 def vector_embedding():
-    st.info("Processing documents...")
-    with st.spinner("Loading and embedding..."):
-        try:
-            hr_docs_path = r"C:/Users/Meghamary.vinu/policy_docs"  # Update this path as needed
+    """Cache the document processing to avoid reprocessing on every run"""
+    try:
+        # Use relative path for both local and cloud deployment
+        hr_docs_path = "policy_docs"
+        
+        if not os.path.isdir(hr_docs_path):
+            raise FileNotFoundError(f"Document folder not found. Expected: 'policy_docs' or '{hr_docs_path}'")
 
-            if not os.path.isdir(hr_docs_path):
-                st.error(f"📁 Folder not found: {hr_docs_path}")
-                return
+        loader = PyPDFDirectoryLoader(hr_docs_path)
+        docs = loader.load()
 
-            loader = PyPDFDirectoryLoader(hr_docs_path)
-            docs = loader.load()
+        if not docs:
+            raise ValueError(f"No documents found in: {hr_docs_path}")
 
-            if not docs:
-                st.warning(f"⚠️ No documents found in: {hr_docs_path}")
-                return
+        # Split into chunks
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        final_documents = splitter.split_documents(docs)
 
-            st.write(f"✅ Loaded {len(docs)} documents.")
-            for d in docs:
-                st.write(f"📄 {d.metadata.get('source', 'Unknown Source')}")
+        # Extract only text for TF-IDF
+        texts = [doc.page_content for doc in final_documents]
 
-            # Split into chunks
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            final_documents = splitter.split_documents(docs)
+        vectorizer = TfidfVectorizer()
+        X = vectorizer.fit_transform(texts)
 
-            # Extract only text for TF-IDF
-            texts = [doc.page_content for doc in final_documents]
+        return {
+            'documents': final_documents,
+            'vectorizer': vectorizer,
+            'tfidf_matrix': X,
+            'doc_count': len(docs),
+            'chunk_count': len(final_documents),
+            'sources': [d.metadata.get('source', 'Unknown Source') for d in docs]
+        }
 
-            vectorizer = TfidfVectorizer()
-            X = vectorizer.fit_transform(texts)
+    except Exception as e:
+        st.error(f"❌ Error while loading documents: {e}")
+        return None
 
-            # Store full documents (not text only)
-            st.session_state.documents = final_documents
-            st.session_state.vectorizer = vectorizer
-            st.session_state.tfidf_matrix = X
+# Auto-load documents on startup
+if 'vector_data' not in st.session_state:
+    with st.spinner("🔄 Loading HR documents..."):
+        st.session_state.vector_data = vector_embedding()
 
-            st.success("✅ Documents embedded using TF-IDF!")
-
-        except Exception as e:
-            st.error(f"❌ Error while loading: {e}")
-            st.session_state.documents = []
-            st.session_state.vectorizer = None
-            st.session_state.tfidf_matrix = None
-
-# Button to trigger vector embedding
-if st.button("📄 Load and Process HR Documents"):
-    vector_embedding()
-
-# Show status
-if "tfidf_matrix" in st.session_state and st.session_state.tfidf_matrix is not None:
-    st.success("✅ TF-IDF vector DB is ready!")
+# Display status
+if st.session_state.vector_data:
+    data = st.session_state.vector_data
+    st.success(f"✅ Ready! Loaded {data['doc_count']} documents ({data['chunk_count']} chunks)")
+    
+    with st.expander("📄 Loaded Documents"):
+        for source in data['sources']:
+            st.write(f"• {os.path.basename(source)}")
 else:
-    st.warning("⚠️ Please load and process documents first.")
+    st.error("❌ Failed to load documents. Please check your document folder and try refreshing the page.")
+    st.info("💡 Make sure your PDF files are in the 'policy_docs' folder")
+    st.stop()
+
+# Add refresh button
+if st.button("🔄 Reload Documents"):
+    st.session_state.vector_data = None
+    st.rerun()
 
 # Input box
-prompt1 = st.text_input("🔍 Ask a question from HR policy documents:")
+prompt1 = st.text_input("🔍 Ask a question about HR policies:", placeholder="e.g., What is the leave policy?")
 
 # Handle user query
 if prompt1:
-    if "tfidf_matrix" in st.session_state and st.session_state.tfidf_matrix is not None:
-        with st.spinner("🤖 Thinking..."):
+    if st.session_state.vector_data:
+        with st.spinner("🤖 Generating answer..."):
             try:
+                data = st.session_state.vector_data
+                
                 # Vectorize user query
-                question_vec = st.session_state.vectorizer.transform([prompt1])
-                scores = cosine_similarity(question_vec, st.session_state.tfidf_matrix)[0]
+                question_vec = data['vectorizer'].transform([prompt1])
+                scores = cosine_similarity(question_vec, data['tfidf_matrix'])[0]
                 top_idx = scores.argsort()[::-1][:3]  # Top 3 most relevant
 
-                # Get top documents as Document objects (not just text)
-                top_docs = [st.session_state.documents[i] for i in top_idx]
+                # Check if we have relevant results
+                if scores[top_idx[0]] < 0.1:  # Low similarity threshold
+                    st.warning("⚠️ I couldn't find very relevant information for your question. The answer below is based on the most similar content I found.")
+
+                # Get top documents as Document objects
+                top_docs = [data['documents'][i] for i in top_idx]
 
                 # Use LLM with Document objects
                 document_chain = create_stuff_documents_chain(llm, prompt)
                 response = document_chain.invoke({"input": prompt1, "context": top_docs})
 
-                # Display Answer - response is a string, not a dict
+                # Display Answer
                 st.write("**Answer:**")
                 st.write(response)
 
-
+                # Optional: Show confidence score
+                confidence = scores[top_idx[0]]
+                if confidence > 0.3:
+                    st.success(f"🎯 High confidence answer (similarity: {confidence:.2f})")
+                elif confidence > 0.1:
+                    st.warning(f"⚠️ Medium confidence answer (similarity: {confidence:.2f})")
+                else:
+                    st.error(f"❌ Low confidence answer (similarity: {confidence:.2f})")
 
             except Exception as e:
-                st.error(f"❌ Error during answer generation: {e}")
-                import traceback
-                st.error(f"Full traceback: {traceback.format_exc()}")
+                st.error(f"❌ Error generating answer: {e}")
+                st.error("Please try rephrasing your question or contact support.")
     else:
-        st.warning("⚠️ Please load documents first.")
+        st.error("❌ Documents not loaded. Please refresh the page.")
+
+# Footer
+st.markdown("---")
+st.markdown("💡 **Tip**: Ask specific questions about HR policies, procedures, benefits, or company guidelines for best results.")
