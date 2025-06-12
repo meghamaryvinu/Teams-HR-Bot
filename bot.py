@@ -25,7 +25,7 @@ if not groq_api_key:
     st.info("💡 In Streamlit Cloud, go to Settings → Secrets and add: HR_CHATBOT_GROQ_KEY = 'your_key_here'")
     st.stop()
 
-st.title("HR Chatbot (TF-IDF + Groq LLaMA3)")
+st.title("Metayb HR Assistant")
 
 # Initialize LLM
 @st.cache_resource
@@ -86,28 +86,16 @@ def vector_embedding():
         st.error(f"❌ Error while loading documents: {e}")
         return None
 
-# Auto-load documents on startup
+# Auto-load documents on startup (silently)
 if 'vector_data' not in st.session_state:
-    with st.spinner("🔄 Loading HR documents..."):
-        st.session_state.vector_data = vector_embedding()
+    # Load silently without showing spinner
+    st.session_state.vector_data = vector_embedding()
 
-# Display status
-if st.session_state.vector_data:
-    data = st.session_state.vector_data
-    st.success(f"✅ Ready! Loaded {data['doc_count']} documents ({data['chunk_count']} chunks)")
-    
-    with st.expander("📄 Loaded Documents"):
-        for source in data['sources']:
-            st.write(f"• {os.path.basename(source)}")
-else:
+# Only show error if documents failed to load
+if not st.session_state.vector_data:
     st.error("❌ Failed to load documents. Please check your document folder and try refreshing the page.")
     st.info("💡 Make sure your PDF files are in the 'policy_docs' folder")
     st.stop()
-
-# Add refresh button
-if st.button("🔄 Reload Documents"):
-    st.session_state.vector_data = None
-    st.rerun()
 
 # Input box
 prompt1 = st.text_input("🔍 Ask a question about HR policies:", placeholder="e.g., What is the leave policy?")
@@ -139,14 +127,14 @@ if prompt1:
                 st.write("**Answer:**")
                 st.write(response)
 
-                # Optional: Show confidence score
+                # Optional: Show confidence score (you can remove this too if you don't want it)
                 confidence = scores[top_idx[0]]
                 if confidence > 0.3:
-                    st.success(f"🎯 High confidence answer (similarity: {confidence:.2f})")
+                    st.success(f"🎯 High confidence answer")
                 elif confidence > 0.1:
-                    st.warning(f"⚠️ Medium confidence answer (similarity: {confidence:.2f})")
+                    st.warning(f"⚠️ Medium confidence answer")
                 else:
-                    st.error(f"❌ Low confidence answer (similarity: {confidence:.2f})")
+                    st.error(f"❌ Low confidence answer")
 
             except Exception as e:
                 st.error(f"❌ Error generating answer: {e}")
