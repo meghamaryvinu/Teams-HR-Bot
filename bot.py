@@ -127,14 +127,7 @@ if prompt1:
                 st.write("**Answer:**")
                 st.write(response)
 
-                # Optional: Show confidence score (you can remove this too if you don't want it)
-                confidence = scores[top_idx[0]]
-                if confidence > 0.3:
-                    st.success(f"🎯 High confidence answer")
-                elif confidence > 0.1:
-                    st.warning(f"⚠️ Medium confidence answer")
-                else:
-                    st.error(f"❌ Low confidence answer")
+
 
             except Exception as e:
                 st.error(f"❌ Error generating answer: {e}")
